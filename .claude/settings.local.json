@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.rs)",
+      "Bash(cargo build:*)",
+      "Bash(brew install:*)",
+      "Bash(cargo update:*)",
+      "Bash(/usr/bin/c++ -v)",
+      "Bash(xcrun --show-sdk-path)",
+      "Bash(SDKROOT=$\\(xcrun --show-sdk-path\\) cargo build)",
+      "Bash(/usr/bin/c++ -x c++ -std=c++17 -I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -c - -o /dev/null)",
+      "Bash(CXXFLAGS=\"-I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1\" cargo build)",
+      "Bash(grep:*)",
+      "Bash(CXXFLAGS=\"-I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1\" cargo build --release)",
+      "Bash(chmod +x:*)",
+      "Bash(say -v '?')",
+      "Bash(say:*)",
+      "Bash(open:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
+    ]
+  }
+}

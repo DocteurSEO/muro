@@ -1,0 +1,19 @@
+[package]
+name = "muro"
+version = "0.1.0"
+edition = "2021"
+description = "Dictation globale : maintiens Fn, parle, relâche, le texte apparaît"
+
+[dependencies]
+cpal = "0.15"
+whisper-rs = { version = "0.16", features = ["metal"] }
+arboard = "3"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+dirs = "5"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+chrono = "0.4"
