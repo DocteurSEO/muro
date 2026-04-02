@@ -315,15 +315,19 @@ fn main() -> Result<()> {
                         }
 
                         info!("Transcription ({:.1}s d'audio)...", duration);
+                        let t0 = std::time::Instant::now();
                         match whisper.transcribe(&audio_data) {
                             Ok(text) => {
+                                let whisper_ms = t0.elapsed().as_millis();
                                 if text.is_empty() {
                                     info!("Transcription vide");
                                     continue;
                                 }
 
-                                info!("Whisper => \"{}\"", text);
+                                info!("Whisper => \"{}\" [{}ms]", text, whisper_ms);
+                                let t1 = std::time::Instant::now();
                                 refocus_app(&frontmost_app);
+                                info!("Refocus [{}ms]", t1.elapsed().as_millis());
 
                                 let parsed = parse_command(&text);
 
@@ -448,12 +452,11 @@ fn main() -> Result<()> {
                                         }
                                     }
                                     VoiceCommand::Dictation(raw_text) => {
+                                        let t2 = std::time::Instant::now();
                                         let final_text = if GROQ_ENABLED.load(Ordering::SeqCst) {
                                             match groq::cleanup(&raw_text) {
                                                 Ok(cleaned) => {
-                                                    if cleaned != raw_text {
-                                                        info!("Groq   => \"{}\"", cleaned);
-                                                    }
+                                                    info!("Groq   => \"{}\" [{}ms]", cleaned, t2.elapsed().as_millis());
                                                     cleaned
                                                 }
                                                 Err(e) => {

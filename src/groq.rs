@@ -1,38 +1,68 @@
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
-const PROMPT_CLEANUP: &str = "Corrige uniquement la ponctuation, les majuscules et la grammaire. \
-    Ne change ni le sens, ni le style, ni les mots. Renvoie uniquement le texte corrigé, rien d'autre.";
+const PROMPT_CLEANUP: &str = "\
+Tu es un moteur de post-traitement pour de la dictée vocale en français. \
+Le texte vient d'un modèle de reconnaissance vocale et contient des imperfections typiques.
 
-const PROMPT_TRANSLATE: &str = "Tu es un traducteur. Traduis le texte ci-dessous. \
-    Si une langue cible est mentionnée (ex: 'en anglais'), traduis dans cette langue. \
-    Sinon, traduis en anglais. Renvoie uniquement la traduction, rien d'autre.";
+Règles strictes :
+1. Supprime les hésitations et tics de langage (euh, hum, ben, bah, genre, en fait, du coup, voilà, quoi)
+2. Restaure la ponctuation correcte (points, virgules, points d'interrogation, points d'exclamation)
+3. Mets les majuscules aux débuts de phrases et aux noms propres
+4. Normalise les acronymes en majuscules (API, JSON, HTTP, SQL, CSS, HTML, etc.)
+5. Corrige les homophones courants (ces/ses/c'est/s'est, a/à, ou/où, son/sont, etc.)
+6. Corrige les erreurs de reconnaissance vocale évidentes selon le contexte
+7. Ne change PAS le sens, le style, ni le vocabulaire de l'utilisateur
+8. Ne rajoute PAS de contenu, ne reformule PAS
 
-const PROMPT_CORRECT: &str = "Corrige toutes les fautes de grammaire, orthographe et syntaxe. \
-    Renvoie uniquement le texte corrigé, rien d'autre.";
+Renvoie UNIQUEMENT le texte nettoyé, sans explication ni commentaire.";
 
-const PROMPT_IMPROVE: &str = "Améliore ce texte : corrige la grammaire, la ponctuation, \
-    et reformule pour que ce soit plus clair et fluide. \
-    Renvoie uniquement le texte amélioré, rien d'autre.";
+const PROMPT_TRANSLATE: &str = "\
+Tu es un traducteur professionnel. \
+Traduis le texte ci-dessous de manière naturelle et idiomatique. \
+Si une langue cible est mentionnée (ex: 'en anglais', 'en espagnol'), traduis dans cette langue. \
+Sinon, traduis en anglais. \
+Renvoie UNIQUEMENT la traduction, rien d'autre.";
 
-fn call(system_prompt: &str, text: &str) -> Result<String> {
+const PROMPT_CORRECT: &str = "\
+Corrige toutes les fautes de grammaire, orthographe, syntaxe et ponctuation. \
+Normalise les acronymes en majuscules. \
+Renvoie UNIQUEMENT le texte corrigé, rien d'autre.";
+
+const PROMPT_IMPROVE: &str = "\
+Améliore ce texte : corrige la grammaire, la ponctuation, les fautes. \
+Reformule les phrases maladroites pour que ce soit plus clair et fluide. \
+Normalise les acronymes. Supprime les hésitations. \
+Conserve le sens et le ton de l'auteur. \
+Renvoie UNIQUEMENT le texte amélioré, rien d'autre.";
+
+// Modele rapide pour le cleanup (dictee quotidienne)
+const MODEL_FAST: &str = "llama-3.3-70b-versatile";
+// Modele puissant pour les commandes complexes (traduction, amelioration)
+const MODEL_SMART: &str = "openai/gpt-oss-120b";
+
+fn call(system_prompt: &str, text: &str, model: &str) -> Result<String> {
     let api_key = std::env::var("GROQ_API_KEY").unwrap_or_default();
 
     if api_key.is_empty() {
         return Ok(text.to_string());
     }
 
-    let body = json!({
+    let mut body = json!({
         "messages": [
             { "role": "system", "content": system_prompt },
             { "role": "user", "content": text }
         ],
-        "model": "openai/gpt-oss-120b",
-        "temperature": 0.2,
+        "model": model,
+        "temperature": 0.1,
         "max_completion_tokens": 2048,
-        "reasoning_effort": "low",
         "stream": false
     });
+
+    // reasoning_effort seulement pour les modeles qui le supportent
+    if model == MODEL_SMART {
+        body["reasoning_effort"] = json!("low");
+    }
 
     let client = reqwest::blocking::Client::new();
     let resp = client
@@ -63,18 +93,22 @@ fn call(system_prompt: &str, text: &str) -> Result<String> {
     Ok(content)
 }
 
+/// Cleanup rapide pour la dictee (modele rapide)
 pub fn cleanup(text: &str) -> Result<String> {
-    call(PROMPT_CLEANUP, text)
+    call(PROMPT_CLEANUP, text, MODEL_FAST)
 }
 
+/// Traduction (modele puissant)
 pub fn translate(text: &str) -> Result<String> {
-    call(PROMPT_TRANSLATE, text)
+    call(PROMPT_TRANSLATE, text, MODEL_SMART)
 }
 
+/// Correction (modele rapide)
 pub fn correct(text: &str) -> Result<String> {
-    call(PROMPT_CORRECT, text)
+    call(PROMPT_CORRECT, text, MODEL_FAST)
 }
 
+/// Amelioration (modele puissant)
 pub fn improve(text: &str) -> Result<String> {
-    call(PROMPT_IMPROVE, text)
+    call(PROMPT_IMPROVE, text, MODEL_SMART)
 }
