@@ -305,13 +305,15 @@ fn main() -> Result<()> {
         loop {
             match rx.recv() {
                 Ok(hotkey::HotkeyEvent::KeyPressed) => {
-                    frontmost_app = get_frontmost_app();
-                    info!("Enregistrement... (app: {:?})", frontmost_app);
+                    // Demarrer l'enregistrement IMMEDIATEMENT
                     play_sound("Tink.aiff");
                     match audio::Recorder::new() {
                         Ok(rec) => recorder = Some(rec),
                         Err(e) => error!("Erreur audio: {}", e),
                     }
+                    // Recuperer l'app active en arriere-plan (pas urgent)
+                    frontmost_app = get_frontmost_app();
+                    info!("Enregistrement... (app: {:?})", frontmost_app);
                 }
                 Ok(hotkey::HotkeyEvent::KeyReleased) => {
                     if let Some(rec) = recorder.take() {

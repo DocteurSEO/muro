@@ -1,40 +1,4 @@
 use anyhow::Result;
-use std::ffi::c_void;
-
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGEventCreateKeyboardEvent(
-        source: *const c_void,
-        keycode: u16,
-        keydown: bool,
-    ) -> *mut c_void;
-    fn CGEventSetFlags(event: *mut c_void, flags: u64);
-    fn CGEventPost(tap: u32, event: *mut c_void);
-}
-
-#[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
-    fn CFRelease(cf: *const c_void);
-}
-
-const K_CG_EVENT_FLAG_MASK_COMMAND: u64 = 0x00100000;
-const V_KEYCODE: u16 = 9;  // touche 'v' (meme position QWERTY/AZERTY)
-
-fn simulate_cmd_key(keycode: u16) {
-    unsafe {
-        let down = CGEventCreateKeyboardEvent(std::ptr::null(), keycode, true);
-        CGEventSetFlags(down, K_CG_EVENT_FLAG_MASK_COMMAND);
-        CGEventPost(0, down);
-        CFRelease(down as *const c_void);
-
-        std::thread::sleep(std::time::Duration::from_millis(20));
-
-        let up = CGEventCreateKeyboardEvent(std::ptr::null(), keycode, false);
-        CGEventSetFlags(up, K_CG_EVENT_FLAG_MASK_COMMAND);
-        CGEventPost(0, up);
-        CFRelease(up as *const c_void);
-    }
-}
 
 fn applescript_keystroke(key: &str) {
     let script = format!(
@@ -69,8 +33,8 @@ pub fn paste_text(text: &str) -> Result<()> {
     // Petit delai pour que le presse-papiers soit pret
     std::thread::sleep(std::time::Duration::from_millis(50));
 
-    // Simuler Cmd+V
-    simulate_cmd_key(V_KEYCODE);
+    // Cmd+V via AppleScript (compatible tous layouts)
+    applescript_keystroke("v");
 
     // Restaurer le presse-papiers precedent
     if let Some(prev) = previous {

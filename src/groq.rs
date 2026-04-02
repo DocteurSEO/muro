@@ -18,15 +18,20 @@ AUTORISÉ :
 - Normaliser les acronymes (api→API, json→JSON, sql→SQL, js→JS)
 - Corriger les homophones (a/à, ou/où, ces/c'est, son/sont)
 - Supprimer les hésitations (euh, hum, ben, bah)
-- Corriger les fautes de reconnaissance vocale évidentes
+
+IMPORTANT : garde EXACTEMENT le registre de langue de l'utilisateur. \
+Ne remplace JAMAIS 'tu' par 'vous', ni 'te' par 'vous', ni 's'il te plaît' par 's'il vous plaît'. \
+Ne change AUCUN mot pour un synonyme. Ne reformule RIEN. \
+Tu corriges UNIQUEMENT l'orthographe et la ponctuation, tu ne touches pas au style.
 
 Renvoie UNIQUEMENT le texte nettoyé. Rien d'autre.";
 
 const PROMPT_TRANSLATE: &str = "\
 Tu es un traducteur professionnel. \
-Traduis le texte ci-dessous de manière naturelle et idiomatique. \
-Si une langue cible est mentionnée (ex: 'en anglais', 'en espagnol'), traduis dans cette langue. \
-Sinon, traduis en anglais. \
+L'utilisateur te donne une instruction de traduction suivie du texte à traduire. \
+L'instruction contient la langue cible (ex: 'en anglais', 'en arabe', 'en espagnol', 'en français'). \
+Traduis le texte dans la langue demandée, de manière naturelle et idiomatique. \
+Si aucune langue n'est précisée, détecte la langue du texte et traduis vers le français si c'est une autre langue, ou vers l'anglais si c'est du français. \
 Renvoie UNIQUEMENT la traduction, rien d'autre.";
 
 const PROMPT_CORRECT: &str = "\
@@ -44,12 +49,34 @@ Renvoie UNIQUEMENT le texte amélioré, rien d'autre.";
 const MODEL_FAST: &str = "llama-3.3-70b-versatile";
 const MODEL_SMART: &str = "openai/gpt-oss-120b";
 
-fn call(system_prompt: &str, text: &str, model: &str) -> Result<String> {
-    let api_key = std::env::var("GROQ_API_KEY").unwrap_or_default();
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-    if api_key.is_empty() {
-        return Ok(text.to_string());
+static KEY_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+fn get_api_keys() -> Vec<String> {
+    std::env::var("GROQ_API_KEYS")
+        .or_else(|_| std::env::var("GROQ_API_KEY"))
+        .unwrap_or_default()
+        .split(',')
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+        .collect()
+}
+
+fn next_api_key() -> Option<String> {
+    let keys = get_api_keys();
+    if keys.is_empty() {
+        return None;
     }
+    let idx = KEY_INDEX.fetch_add(1, Ordering::SeqCst) % keys.len();
+    Some(keys[idx].clone())
+}
+
+fn call(system_prompt: &str, text: &str, model: &str) -> Result<String> {
+    let api_key = match next_api_key() {
+        Some(k) => k,
+        None => return Ok(text.to_string()),
+    };
 
     // Encadrer le texte pour empecher l'interpretation
     let wrapped = format!("---DEBUT TEXTE---\n{}\n---FIN TEXTE---", text);
@@ -104,10 +131,10 @@ fn call(system_prompt: &str, text: &str, model: &str) -> Result<String> {
 
 /// Transcription audio via Groq Whisper API (large-v3-turbo sur LPU)
 pub fn transcribe_audio(audio_pcm: &[f32]) -> Result<String> {
-    let api_key = std::env::var("GROQ_API_KEY").unwrap_or_default();
-    if api_key.is_empty() {
-        bail!("GROQ_API_KEY manquante pour la transcription cloud");
-    }
+    let api_key = match next_api_key() {
+        Some(k) => k,
+        None => bail!("Aucune clé API Groq configurée"),
+    };
 
     // Encoder en WAV (PCM 16-bit, 16kHz, mono)
     let wav_data = encode_wav(audio_pcm);
