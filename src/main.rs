@@ -141,7 +141,8 @@ enum VoiceCommand {
     SelectAll,
     Stop,
     ReadAloud,
-    TranslateSelection(String), // instruction langue (ex: "en anglais")
+    History,
+    TranslateSelection(String),
     Correct(String),
     Improve,
     Dictation(String),
@@ -161,14 +162,20 @@ fn parse_command(text: &str) -> ParsedCommand {
     let words: Vec<String> = lower.split_whitespace().map(|w| clean_word(w)).collect();
     let first = words.first().map(|s| s.as_str()).unwrap_or("");
 
-    // Detecter "lis" n'importe ou
-    let read_aloud = words.iter().any(|w| {
-        matches!(w.as_str(), "lis" | "lire" | "lecture" | "lis-le" | "lis-moi")
-    });
+    // "lis" doit etre dans les 2 premiers mots pour eviter les faux positifs
+    // (ex: "dis-moi" confondu avec "lis-moi" par Whisper)
+    let first_two = &words[..words.len().min(2)];
+    let read_aloud = first_two.iter().any(|w| matches!(w.as_str(), "lis" | "lire"))
+        || matches!(first, "lecture");
 
     // "stop" / "arrête"
     if matches!(first, "stop" | "arrête" | "arrete" | "arrêter" | "arreter" | "tais-toi") {
         return ParsedCommand { command: VoiceCommand::Stop, read_aloud: false };
+    }
+
+    // "historique"
+    if matches!(first, "historique" | "historiques" | "history") {
+        return ParsedCommand { command: VoiceCommand::History, read_aloud: false };
     }
 
     // "desactive groq"
@@ -197,7 +204,9 @@ fn parse_command(text: &str) -> ParsedCommand {
     // "traduis [en anglais]" — traduit le texte SELECTIONNE
     if matches!(first, "traduis" | "traduire" | "traduit") {
         let lang = extract_lang(&lower, &["traduis", "traduire", "traduit"]);
-        return ParsedCommand { command: VoiceCommand::TranslateSelection(lang), read_aloud };
+        // "traduis ... et lis" → read_aloud meme si "lis" n'est pas dans les 2 premiers mots
+        let has_lis_suffix = words.last().map(|w| w.as_str()) == Some("lis");
+        return ParsedCommand { command: VoiceCommand::TranslateSelection(lang), read_aloud: read_aloud || has_lis_suffix };
     }
 
     // "corrige [texte dicte]"
@@ -316,7 +325,16 @@ fn main() -> Result<()> {
 
                         info!("Transcription ({:.1}s d'audio)...", duration);
                         let t0 = std::time::Instant::now();
-                        match whisper.transcribe(&audio_data) {
+
+                        // Essayer Groq Whisper API (cloud, rapide), fallback local
+                        let transcription = groq::transcribe_audio(&audio_data)
+                            .map(|t| { info!("Groq Whisper => cloud [{}ms]", t0.elapsed().as_millis()); t })
+                            .or_else(|e| {
+                                info!("Cloud indisponible ({}), fallback local...", e);
+                                whisper.transcribe(&audio_data)
+                            });
+
+                        match transcription {
                             Ok(text) => {
                                 let whisper_ms = t0.elapsed().as_millis();
                                 if text.is_empty() {
@@ -336,6 +354,15 @@ fn main() -> Result<()> {
                                         info!("Commande: stop lecture");
                                         stop_reading();
                                         history::save(&text, "", "stop");
+                                    }
+                                    VoiceCommand::History => {
+                                        info!("Commande: historique");
+                                        let hist = history::recent(10);
+                                        info!("Historique:\n{}", hist);
+                                        // Coller l'historique dans l'app active
+                                        if let Err(e) = paste::paste_text(&hist) {
+                                            error!("Erreur paste: {}", e);
+                                        }
                                     }
                                     VoiceCommand::ActivateGroq => {
                                         GROQ_ENABLED.store(true, Ordering::SeqCst);
