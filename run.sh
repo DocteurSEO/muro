@@ -1,6 +1,11 @@
 #!/bin/bash
-# Usage: ./run.sh [small|medium|large-v3-turbo]
+# Usage: ./run.sh [tiny|small|medium|large-v3-turbo]
 export CXXFLAGS="-I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1"
-export GROQ_API_KEYS="YOUR_GROQ_KEY,YOUR_GROQ_KEY,YOUR_GROQ_KEY,YOUR_GROQ_KEY"
+
+# Charger les cles API depuis .env
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
 export MURO_MODEL="${1:-tiny}"
 cargo run --release

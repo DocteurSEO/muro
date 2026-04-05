@@ -1,3 +1,4 @@
 /target
 *.db
-/com.muro.agent.plist
+.env
+com.muro.agent.plist
