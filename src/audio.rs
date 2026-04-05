@@ -29,7 +29,7 @@ impl Recorder {
         let stream = device.build_input_stream(
             &stream_config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let mut buf = buffer_clone.lock().unwrap();
+                let Ok(mut buf) = buffer_clone.lock() else { return };
                 if channels > 1 {
                     for chunk in data.chunks(channels) {
                         let mono: f32 = chunk.iter().sum::<f32>() / channels as f32;
@@ -55,7 +55,7 @@ impl Recorder {
     /// Arrete l'enregistrement et retourne l'audio en 16kHz mono f32
     pub fn stop(self) -> Vec<f32> {
         drop(self.stream);
-        let raw = self.buffer.lock().unwrap().clone();
+        let raw = self.buffer.lock().unwrap_or_else(|e| e.into_inner()).clone();
         resample(&raw, self.device_sample_rate, 16000)
     }
 }

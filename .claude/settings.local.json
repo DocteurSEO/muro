@@ -19,7 +19,14 @@
       "Bash(git init:*)",
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(git reflog:*)",
+      "Bash(git gc:*)",
+      "Bash(FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch:*)",
+      "Bash(git stash:*)",
+      "Bash(git filter-branch --force --tree-filter ':*)",
+      "Bash(cargo check:*)",
+      "Bash(git check-ignore:*)"
     ]
   }
 }
