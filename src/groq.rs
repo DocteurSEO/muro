@@ -1,5 +1,7 @@
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tracing::warn;
 
 const PROMPT_CLEANUP: &str = "\
 Tu es un correcteur orthographique automatique. Tu n'es PAS un assistant, tu n'es PAS un chatbot. \
@@ -49,7 +51,7 @@ Renvoie UNIQUEMENT le texte amélioré, rien d'autre.";
 const MODEL_FAST: &str = "llama-3.3-70b-versatile";
 const MODEL_SMART: &str = "openai/gpt-oss-120b";
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+// --- Rotation des clés avec retry sur 429 ---
 
 static KEY_INDEX: AtomicUsize = AtomicUsize::new(0);
 
@@ -72,97 +74,127 @@ fn next_api_key() -> Option<String> {
     Some(keys[idx].clone())
 }
 
-fn call(system_prompt: &str, text: &str, model: &str) -> Result<String> {
-    let api_key = match next_api_key() {
-        Some(k) => k,
-        None => return Ok(text.to_string()),
-    };
-
-    // Encadrer le texte pour empecher l'interpretation
-    let wrapped = format!("---DEBUT TEXTE---\n{}\n---FIN TEXTE---", text);
-
-    let mut body = json!({
-        "messages": [
-            { "role": "system", "content": system_prompt },
-            { "role": "user", "content": wrapped }
-        ],
-        "model": model,
-        "temperature": 0.1,
-        "max_completion_tokens": 2048,
-        "stream": false
-    });
-
-    if model == MODEL_SMART {
-        body["reasoning_effort"] = json!("low");
-    }
-
-    let client = reqwest::blocking::Client::new();
-    let resp = client
-        .post("https://api.groq.com/openai/v1/chat/completions")
-        .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(15))
-        .send()?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().unwrap_or_default();
-        bail!("Groq API erreur {}: {}", status, body);
-    }
-
-    let json: Value = resp.json()?;
-    let content = json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or(text)
-        .trim()
-        // Nettoyer les marqueurs si le modele les repete
-        .trim_start_matches("---DEBUT TEXTE---")
-        .trim_end_matches("---FIN TEXTE---")
-        .trim()
-        .to_string();
-
-    if content.is_empty() {
-        return Ok(text.to_string());
-    }
-
-    Ok(content)
+fn key_suffix(key: &str) -> &str {
+    if key.len() > 8 { &key[key.len()-4..] } else { key }
 }
 
-/// Transcription audio via Groq Whisper API (large-v3-turbo sur LPU)
-pub fn transcribe_audio(audio_pcm: &[f32]) -> Result<String> {
-    let api_key = match next_api_key() {
-        Some(k) => k,
-        None => bail!("Aucune clé API Groq configurée"),
-    };
+// --- Appels API ---
 
-    // Encoder en WAV (PCM 16-bit, 16kHz, mono)
-    let wav_data = encode_wav(audio_pcm);
+fn call(system_prompt: &str, text: &str, model: &str) -> Result<String> {
+    let keys = get_api_keys();
+    let max_retries = keys.len().min(4);
 
-    let client = reqwest::blocking::Client::new();
-    let form = reqwest::blocking::multipart::Form::new()
-        .text("model", "whisper-large-v3-turbo")
-        .text("language", "fr")
-        .text("response_format", "text")
-        .part("file", reqwest::blocking::multipart::Part::bytes(wav_data)
-            .file_name("audio.wav")
-            .mime_str("audio/wav")?);
+    let wrapped = format!("---DEBUT TEXTE---\n{}\n---FIN TEXTE---", text);
 
-    let resp = client
-        .post("https://api.groq.com/openai/v1/audio/transcriptions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .multipart(form)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()?;
+    for attempt in 0..max_retries {
+        let api_key = match next_api_key() {
+            Some(k) => k,
+            None => return Ok(text.to_string()),
+        };
 
-    if !resp.status().is_success() {
+        let mut body = json!({
+            "messages": [
+                { "role": "system", "content": system_prompt },
+                { "role": "user", "content": wrapped }
+            ],
+            "model": model,
+            "temperature": 0.1,
+            "max_completion_tokens": 2048,
+            "stream": false
+        });
+
+        if model == MODEL_SMART {
+            body["reasoning_effort"] = json!("low");
+        }
+
+        let client = reqwest::blocking::Client::new();
+        let resp = client
+            .post("https://api.groq.com/openai/v1/chat/completions")
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()?;
+
         let status = resp.status();
-        let body = resp.text().unwrap_or_default();
-        bail!("Groq Whisper API erreur {}: {}", status, body);
+
+        // 429 Too Many Requests → retry avec une autre clé
+        if status.as_u16() == 429 {
+            warn!("Groq 429 sur clé ...{}, tentative {}/{}", key_suffix(&api_key), attempt + 1, max_retries);
+            continue;
+        }
+
+        if !status.is_success() {
+            let body = resp.text().unwrap_or_default();
+            bail!("Groq API erreur {}: {}", status, body);
+        }
+
+        let json: Value = resp.json()?;
+        let content = json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or(text)
+            .trim()
+            .trim_start_matches("---DEBUT TEXTE---")
+            .trim_end_matches("---FIN TEXTE---")
+            .trim()
+            .to_string();
+
+        if content.is_empty() {
+            return Ok(text.to_string());
+        }
+
+        return Ok(content);
     }
 
-    let text = resp.text()?.trim().to_string();
-    Ok(text)
+    warn!("Toutes les clés en 429, retour du texte brut");
+    Ok(text.to_string())
+}
+
+/// Transcription audio via Groq Whisper API avec retry sur 429
+pub fn transcribe_audio(audio_pcm: &[f32]) -> Result<String> {
+    let keys = get_api_keys();
+    let max_retries = keys.len().min(4);
+    let wav_data = encode_wav(audio_pcm);
+
+    for attempt in 0..max_retries {
+        let api_key = match next_api_key() {
+            Some(k) => k,
+            None => bail!("Aucune clé API Groq configurée"),
+        };
+
+        let client = reqwest::blocking::Client::new();
+        let form = reqwest::blocking::multipart::Form::new()
+            .text("model", "whisper-large-v3-turbo")
+            .text("language", "fr")
+            .text("response_format", "text")
+            .part("file", reqwest::blocking::multipart::Part::bytes(wav_data.clone())
+                .file_name("audio.wav")
+                .mime_str("audio/wav")?);
+
+        let resp = client
+            .post("https://api.groq.com/openai/v1/audio/transcriptions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .multipart(form)
+            .timeout(std::time::Duration::from_secs(30))
+            .send()?;
+
+        let status = resp.status();
+
+        if status.as_u16() == 429 {
+            warn!("Groq Whisper 429 sur clé ...{}, tentative {}/{}", key_suffix(&api_key), attempt + 1, max_retries);
+            continue;
+        }
+
+        if !status.is_success() {
+            let body = resp.text().unwrap_or_default();
+            bail!("Groq Whisper API erreur {}: {}", status, body);
+        }
+
+        let text = resp.text()?.trim().to_string();
+        return Ok(text);
+    }
+
+    bail!("Toutes les clés Groq en 429 pour Whisper")
 }
 
 /// Encode f32 PCM (16kHz mono) en WAV 16-bit
@@ -178,22 +210,19 @@ fn encode_wav(samples: &[f32]) -> Vec<u8> {
 
     let mut buf = Vec::with_capacity(44 + data_size as usize);
 
-    // RIFF header
     buf.extend_from_slice(b"RIFF");
     buf.extend_from_slice(&file_size.to_le_bytes());
     buf.extend_from_slice(b"WAVE");
 
-    // fmt chunk
     buf.extend_from_slice(b"fmt ");
-    buf.extend_from_slice(&16u32.to_le_bytes()); // chunk size
-    buf.extend_from_slice(&1u16.to_le_bytes());  // PCM
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes());
     buf.extend_from_slice(&num_channels.to_le_bytes());
     buf.extend_from_slice(&sample_rate.to_le_bytes());
     buf.extend_from_slice(&byte_rate.to_le_bytes());
     buf.extend_from_slice(&block_align.to_le_bytes());
     buf.extend_from_slice(&bits_per_sample.to_le_bytes());
 
-    // data chunk
     buf.extend_from_slice(b"data");
     buf.extend_from_slice(&data_size.to_le_bytes());
 
