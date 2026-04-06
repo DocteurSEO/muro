@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use std::thread;
 use tracing::{error, info};
 
-static GROQ_ENABLED: AtomicBool = AtomicBool::new(true);
+static GROQ_ENABLED: AtomicBool = AtomicBool::new(false);
 
 // --- Sons et voix ---
 
